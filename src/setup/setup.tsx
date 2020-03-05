@@ -17,6 +17,8 @@ export function MeetingSetup(props: {
     const [displayName, setDisplayName] = useState(oldConfig.displayName)
     const [gateway, setGateway] = useState(oldConfig.gateway)
     const [sessionId, setSessionId] = useState(oldConfig.sessionId)
+    const [useAudio, setUseAudio] = useState(oldConfig.useAudio)
+    const [useVideo, setUseVideo] = useState(oldConfig.useVideo)
 
     if (applyCallback === null) { throw new Error() }
 
@@ -25,6 +27,8 @@ export function MeetingSetup(props: {
             displayName: displayName,
             gateway: gateway,
             sessionId: sessionId,
+            useAudio: useAudio,
+            useVideo: useVideo,
         })
     }
 
@@ -62,7 +66,9 @@ export function MeetingSetup(props: {
                         value={sessionId}
                     />
                     <small className="form-text text-muted">
-                        An unique string to identify your session. Paste the id shared by others to join their sessions.
+                        An unique string to identify your session.
+                        <br />
+                        Paste the id shared by others to join their sessions.
                     </small>
                 </div>
 
@@ -86,6 +92,32 @@ export function MeetingSetup(props: {
                     <small className="form-text text-muted">
                         The server that hosts your session.
                     </small>
+                </div>
+
+                <div className="form-group">
+                    <div className="custom-control custom-checkbox">
+                        <input
+                            className="custom-control-input"
+                            type="checkbox"
+                            id="user-config-useVideo"
+
+                            checked={useVideo}
+                            onChange={(event) => setUseVideo(event.target.checked)}
+                        />
+                        <label className="custom-control-label" htmlFor="user-config-useVideo">Use my camera and enable video</label>
+                    </div>
+
+                    <div className="custom-control custom-checkbox">
+                        <input
+                            className="custom-control-input"
+                            type="checkbox"
+                            id="user-config-useAudio"
+
+                            checked={useAudio}
+                            onChange={(event) => setUseAudio(event.target.checked)}
+                        />
+                        <label className="custom-control-label" htmlFor="user-config-useAudio">Use my microphone and enable audio</label>
+                    </div>
                 </div>
 
                 <button type="button" className="btn btn-primary btn-block" onClick={() => applyConfig()}>

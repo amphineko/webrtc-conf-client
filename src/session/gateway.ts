@@ -7,18 +7,124 @@ export interface Participant {
 
 }
 
+interface MediaTracks { audio: MediaStreamTrack, video: MediaStreamTrack }
+
+export class RtcConnection {
+    public ontrack: (track: MediaStreamTrack) => void
+
+    private client: HubConnection
+
+    private conn: RTCPeerConnection
+
+    private logger: Logger
+
+    private remoteId: string
+
+    private tracks: MediaTracks
+
+    public constructor(remoteId: string, client: HubConnection, tracks: MediaTracks) {
+        this.remoteId = remoteId
+        this.client = client
+        this.tracks = tracks
+
+        this.logger = getLogger('RtcConnection')
+
+        const conn = new RTCPeerConnection()
+
+        conn.onicecandidate = (event) => {
+            if (event.candidate) { this.client.invoke('SendIceCandidate', remoteId, JSON.stringify(event.candidate)) }
+        }
+
+        conn.onnegotiationneeded = async () => {
+            if (conn.signalingState !== 'stable') { return }
+
+            await this.negotiate()
+        }
+
+        conn.onconnectionstatechange = () => {
+            this.logger.info(`Peer ${remoteId} Connection: ${conn.connectionState}`)
+
+            if (conn.connectionState === 'connected') {
+                if (this.tracks.audio) { this.conn.addTrack(this.tracks.audio) }
+                if (this.tracks.video) { this.conn.addTrack(this.tracks.video) }
+            }
+        }
+        conn.oniceconnectionstatechange = () => this.logger.info(`Peer ${remoteId} Ice Connection: ${conn.iceConnectionState}`)
+        conn.onicegatheringstatechange = () => this.logger.info(`Peer ${remoteId} Ice Gathering: ${conn.iceGatheringState}`)
+        conn.onsignalingstatechange = () => this.logger.info(`Peer ${remoteId} Signaling: ${conn.signalingState}`)
+
+        conn.ontrack = (event) => {
+            this.logger.info(`Received ${event} track from ${remoteId}`)
+        }
+
+        this.conn = conn
+    }
+
+    public async close() {
+        this.conn.close()
+    }
+
+    public async handleAnswer(answer: string) {
+        this.logger.debug(`${this.remoteId}: Rtc Answer`)
+
+        await this.conn.setRemoteDescription(JSON.parse(answer))
+    }
+
+    public async handleIceCandidate(candidate: string) {
+        this.logger.debug(`${this.remoteId}: Ice Candidate`)
+
+        await this.conn.addIceCandidate(JSON.parse(candidate))
+    }
+
+    public async handleOffer(offer: string) {
+        this.logger.debug(`${this.remoteId}: Rtc Offer`)
+
+        await this.conn.setRemoteDescription(JSON.parse(offer))
+        const answer = await this.conn.createAnswer({
+            offerToReceiveAudio: this.tracks.audio && true,
+            offerToReceiveVideo: this.tracks.video && true,
+        })
+        await this.conn.setLocalDescription(answer)
+        await this.client.invoke('SendRtcAnswer', this.remoteId, JSON.stringify(answer))
+
+        this.logger.debug(`Sent Rtc Answer to ${this.remoteId}`)
+    }
+
+    public async negotiate() {
+        const offer = await this.conn.createOffer({
+            offerToReceiveAudio: this.tracks.audio && true,
+            offerToReceiveVideo: this.tracks.video && true,
+        })
+        await this.conn.setLocalDescription(offer)
+        await this.client.invoke('SendRtcOffer', this.remoteId, JSON.stringify(offer))
+
+        this.logger.debug(`Sent Rtc Offer to ${this.remoteId}`)
+    }
+}
+
 export class GatewayClient {
     public onconnected: () => void
 
     public ondisconnected: () => void
 
-    private logger: Logger
+    public ontrack: (id: string, track: MediaStreamTrack) => void
 
-    private client: HubConnection
+    private readonly client: HubConnection
+
+    private clientId: string
+
+    private readonly connections: Map<string, RtcConnection>
+
+    private readonly logger: Logger
 
     private sessionId: string
 
-    public constructor(url: string) {
+    private tracks: MediaTracks
+
+    public constructor(url: string, tracks: MediaTracks) {
+        this.tracks = tracks
+
+        this.connections = new Map()
         this.logger = getLogger('GatewayClient')
         this.sessionId = null
 
@@ -30,11 +136,22 @@ export class GatewayClient {
         this.client.onreconnected = this.onconnected
         this.client.onreconnecting = this.ondisconnected
 
-        this.client.on('OnParticipantIceCandidate', (origin, payload) => this.onIceCandidate(origin, payload))
-        this.client.on('OnParticipantJoin', (id, description) => this.onJoin(id, description))
+        this.client.on('OnParticipantIceCandidate', async (origin, payload) => {
+            await this.connections.get(origin).handleIceCandidate(payload)
+        })
+        this.client.on('OnParticipantRtcAnswer', async (origin, payload) => {
+            await this.connections.get(origin).handleAnswer(payload)
+        })
+        this.client.on('OnParticipantRtcOffer', async (origin, payload) => {
+            if (!this.connections.has(origin)) {
+                this.addConnection(origin, true)
+            }
+
+            await this.connections.get(origin).handleOffer(payload)
+        })
+
+        this.client.on('OnParticipantJoin', (id) => this.onJoin(id))
         this.client.on('OnParticipantLeave', (id) => this.onLeave(id))
-        this.client.on('OnParticipantRtcAnswer', (origin, sdp) => this.onRtcAnswer(origin, sdp))
-        this.client.on('OnParticipantRtcOffer', (origin, sdp) => this.onRtcOffer(origin, sdp))
     }
 
     public async join(id: string) {
@@ -42,6 +159,8 @@ export class GatewayClient {
 
         this.sessionId = id
         await this.client.invoke('JoinSession', id)
+
+        this.logger.info(`Joined session ${id}`)
     }
 
     public async leave() {
@@ -50,32 +169,34 @@ export class GatewayClient {
 
     public async start() {
         await this.client.start().then(() => this.onconnected())
+        this.clientId = await this.client.invoke('GetParticipantId')
+        this.logger.info(`Local participant Id: ${this.clientId}`)
     }
 
     public async stop() {
         await this.client.stop().then(() => this.ondisconnected())
     }
 
-    private onIceCandidate(origin: string, payload: string) {
-        this.logger.debug(`Received Ice Candidate from ${origin}: ${payload}`)
-        throw new Error('Not implemented')
+    private async addConnection(id: string, passive: boolean) {
+        if (this.connections.has(id)) { this.connections.get(id).close() }
+
+        const conn = new RtcConnection(id, this.client, this.tracks)
+        this.connections.set(id, conn)
+        if (!passive) { await conn.negotiate() }
     }
 
-    private onJoin(id: string, description: Participant): void {
-        this.logger.info(`Participant ${id} joined session.`)
+    private async onLeave(id: string) {
+        this.logger.info(`Participant ${id} left`)
+
+        const conn = this.connections.get(id)
+        if (conn) { await conn.close() }
+
+        this.connections.delete(id)
     }
 
-    private onLeave(id: string): void {
-        this.logger.info(`Participant ${id} left session.`)
-    }
+    private async onJoin(id: string) {
+        this.logger.info(`Participant ${id} joined`)
 
-    private onRtcAnswer(origin: string, sdp: string) {
-        this.logger.debug(`Received Rtc Answer from ${origin}: ${sdp}`)
-        throw new Error('Not implemented')
-    }
-
-    private onRtcOffer(origin: string, sdp: string) {
-        this.logger.debug(`Received Rtc Offer from ${origin}: ${sdp}`)
-        throw new Error('Not implemented')
+        await this.addConnection(id, false)
     }
 }

@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react'
 import ReactDOM from 'react-dom'
-import newUuid from 'uuid/v4'
 import 'webrtc-adapter'
 
 import { getLogger, setDebug } from './log'
@@ -26,9 +25,16 @@ function AppIndex(props: {
     const [userConfig, setUserConfig] = useState<UserConfiguration>({
         displayName: '',
         gateway: appConfig.defaultGateway,
-        sessionId: newUuid(),
+        // sessionId: newUuid(),
+        sessionId: '6db9e994-c098-429a-9a71-954edd4809b4',
+
+        useAudio: true,
+        useVideo: true,
     })
     const [isSetupScene, setSetupScene] = useState(true)
+
+    const [audioTrack, setAudioTrack] = useState<MediaStreamTrack>(null)
+    const [videoTrack, setVideoTrack] = useState<MediaStreamTrack>(null)
 
     const gateway = useRef<GatewayClient>(null)
     const logger = getLogger('AppIndex')
@@ -42,10 +48,45 @@ function AppIndex(props: {
             gateway.current = null
         }
 
+        let rtcAudioTrack = audioTrack
+        let rtcVideoTrack = videoTrack
+        if (newConfig.useAudio || newConfig.useVideo) {
+            const media = await navigator.mediaDevices.getUserMedia({
+                audio: newConfig.useAudio,
+                video: newConfig.useVideo,
+            })
+
+            const audioTracks = media.getAudioTracks()
+            if (audioTracks.length === 0) {
+                // TODO: more user notification
+                logger.warn('No audio tracks provided')
+                setUserConfig({ useAudio: false } as UserConfiguration)
+            } else {
+                rtcAudioTrack = audioTracks.shift()
+                setAudioTrack(rtcAudioTrack)
+                audioTracks.forEach((track) => track.stop()) // stop additional tracks
+            }
+
+            const videoTracks = media.getVideoTracks()
+            if (videoTracks.length === 0) {
+                // TODO: more user notification
+                logger.warn('No video tracks provided')
+                setUserConfig({ useVideo: false } as UserConfiguration)
+            } else {
+                rtcVideoTrack = videoTracks.shift()
+                setVideoTrack(rtcVideoTrack)
+                videoTracks.forEach((track) => track.stop()) // stop additional tracks
+            }
+        }
+
         const url = `http://${userConfig.gateway}/api/v1/gateway`
-        gateway.current = new GatewayClient(url)
+        gateway.current = new GatewayClient(url, {
+            audio: rtcAudioTrack,
+            video: rtcVideoTrack,
+        })
         gateway.current.onconnected = () => logger.info(`Connected to Gateway: ${url}`)
         gateway.current.ondisconnected = () => logger.info('Disconnected from Gateway')
+        gateway.current.ontrack = (id, track) => logger.info(`Incoming ${track.kind} track from ${id}`)
         await gateway.current.start()
         await gateway.current.join(newConfig.sessionId)
     }
