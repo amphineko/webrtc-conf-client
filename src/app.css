@@ -1,0 +1,8 @@
+.remote-participant {
+    box-shadow: 0 0 0.1em 0.1em rgba(0, 0, 0, 0.1);
+    margin: 1em;
+}
+
+.remote-participant video {
+    width: 100%;
+}

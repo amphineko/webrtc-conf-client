@@ -36,6 +36,9 @@ function AppIndex(props: {
     const [audioTrack, setAudioTrack] = useState<MediaStreamTrack>(null)
     const [videoTrack, setVideoTrack] = useState<MediaStreamTrack>(null)
 
+    const remoteTracks = useRef(new Map<string, Set<MediaStreamTrack>>())
+    const [, refresh] = useState()
+
     const gateway = useRef<GatewayClient>(null)
     const logger = getLogger('AppIndex')
 
@@ -55,6 +58,9 @@ function AppIndex(props: {
                 audio: newConfig.useAudio,
                 video: newConfig.useVideo,
             })
+
+            remoteTracks.current.set('local', new Set(media.getTracks()))
+            refresh(Math.random())
 
             const audioTracks = media.getAudioTracks()
             if (audioTracks.length === 0) {
@@ -86,7 +92,21 @@ function AppIndex(props: {
         })
         gateway.current.onconnected = () => logger.info(`Connected to Gateway: ${url}`)
         gateway.current.ondisconnected = () => logger.info('Disconnected from Gateway')
-        gateway.current.ontrack = (id, track) => logger.info(`Incoming ${track.kind} track from ${id}`)
+
+        gateway.current.ontrack = (id, track) => {
+            if (!remoteTracks.current.has(id)) { remoteTracks.current.set(id, new Set()) }
+
+            const tracks = remoteTracks.current.get(id)
+            tracks.add(track)
+
+            track.addEventListener('ended', () => {
+                tracks.delete(track)
+                refresh(Math.random())
+            })
+
+            refresh(Math.random())
+        }
+
         await gateway.current.start()
         await gateway.current.join(newConfig.sessionId)
     }
@@ -101,7 +121,7 @@ function AppIndex(props: {
         )
     }
 
-    return <AppMain />
+    return <AppMain tracks={remoteTracks.current} />
 }
 
 function getLocalConfiguration(): Promise<AppConfiguration> {

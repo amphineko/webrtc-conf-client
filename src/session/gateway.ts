@@ -54,7 +54,8 @@ export class RtcConnection {
         conn.onsignalingstatechange = () => this.logger.info(`Peer ${remoteId} Signaling: ${conn.signalingState}`)
 
         conn.ontrack = (event) => {
-            this.logger.info(`Received ${event} track from ${remoteId}`)
+            this.logger.info(`Received ${event.track.kind} track from ${remoteId}`)
+            this.ontrack(event.track)
         }
 
         this.conn = conn
@@ -181,6 +182,7 @@ export class GatewayClient {
         if (this.connections.has(id)) { this.connections.get(id).close() }
 
         const conn = new RtcConnection(id, this.client, this.tracks)
+        conn.ontrack = (track) => this.ontrack(id, track)
         this.connections.set(id, conn)
         if (!passive) { await conn.negotiate() }
     }
