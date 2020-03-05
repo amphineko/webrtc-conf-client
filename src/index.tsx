@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import newUuid from 'uuid/v4'
+import 'webrtc-adapter'
 
 import { getLogger, setDebug } from './log'
 
